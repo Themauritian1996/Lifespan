@@ -1,0 +1,20 @@
+{
+  "name": "lifespan",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Lifespan — simulateur d'outcomes de vie selon les habitudes et paramètres cliniques (PWA + Capacitor).",
+  "scripts": {
+    "dev": "node tools/serve.mjs 5173 --open",
+    "test": "node tests/calibrate.mjs",
+    "build": "node tools/build-artifact.mjs",
+    "android": "npx cap sync android && npx cap open android"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/local-notifications": "^7.0.0"
+  }
+}

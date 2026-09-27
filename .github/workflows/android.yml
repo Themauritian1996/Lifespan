@@ -1,0 +1,63 @@
+# Construit l'application Android (APK) avec Capacitor et la publie dans « Releases ».
+name: Application Android
+on:
+  push:
+    branches: [main]
+    paths: ['app/**', 'capacitor.config.json', 'package.json', '.github/workflows/android.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: Installer Capacitor
+        run: npm install --no-audit --no-fund
+      - name: Créer le projet Android
+        run: npx cap add android
+      - name: Icône de l'application
+        continue-on-error: true
+        run: |
+          mkdir -p assets
+          npx --yes sharp-cli -i app/assets/icon-maskable.svg -o assets/icon-only.png resize 1024 1024
+          cp assets/icon-only.png assets/icon-foreground.png
+          npx --yes sharp-cli -i app/assets/icon-maskable.svg -o assets/icon-background.png resize 1024 1024
+          npx --yes @capacitor/assets generate --android --iconBackgroundColor '#0a0a0b' --splashBackgroundColor '#0a0a0b'
+      - name: Autoriser les notifications et alarmes
+        run: |
+          M=android/app/src/main/AndroidManifest.xml
+          grep -q POST_NOTIFICATIONS $M || sed -i 's#<uses-permission android:name="android.permission.INTERNET" />#<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />\n    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />#' $M
+          cat $M
+      - name: Ajouter le moteur natif (notifications) à la page
+        run: |
+          cp node_modules/@capacitor/core/dist/capacitor.js app/capacitor.js
+          cp node_modules/@capacitor/local-notifications/dist/plugin.js app/capacitor-local-notifications.js
+          sed -i 's#<script src="js/sources.js"></script>#<script src="capacitor.js"></script><script src="capacitor-local-notifications.js"></script><script src="js/sources.js"></script>#' app/index.html
+          grep -n "script src" app/index.html
+      - name: Synchroniser le site dans l'app
+        run: npx cap sync android
+      - name: Compiler l'APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - name: Renommer
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk Lifespan.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Lifespan-android
+          path: Lifespan.apk
+      - name: Publier dans Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest Lifespan.apk --title "Lifespan pour Android (dernière version)" --notes "Télécharge Lifespan.apk sur ton téléphone Android et ouvre-le pour l'installer. Construit automatiquement le $(date -u +'%d/%m/%Y à %H:%M UTC')." --latest

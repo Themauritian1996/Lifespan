@@ -1,0 +1,21 @@
+{
+  "name": "Lifespan — simulateur de vie",
+  "short_name": "Lifespan",
+  "description": "Simule ton espérance de vie, tes années en bonne santé et l'effet de tes habitudes. Sources et formules ouvertes.",
+  "lang": "fr",
+  "start_url": "./#now",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0b",
+  "theme_color": "#0a0a0b",
+  "categories": ["health", "lifestyle", "education"],
+  "icons": [
+    { "src": "assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "assets/icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Simuler", "url": "./#sim" },
+    { "name": "Check-in du jour", "url": "./#quests" }
+  ]
+}

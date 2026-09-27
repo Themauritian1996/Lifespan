@@ -1,0 +1,8 @@
+{
+  "appId": "app.lifespan.simulator",
+  "appName": "Lifespan",
+  "webDir": "app",
+  "backgroundColor": "#0a0a0b",
+  "android": { "backgroundColor": "#0a0a0b" },
+  "ios": { "contentInset": "never", "backgroundColor": "#0a0a0b" }
+}
