@@ -1901,7 +1901,7 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
     $$('[data-sync]').forEach((el) => (el.textContent = txt));
   }
   async function boot() {
-    if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) navigator.serviceWorker.register('sw.js').catch(() => {});
+    if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) { navigator.serviceWorker.register('sw.js').then((r) => r.update()).catch(() => {}); let reloaded = false; const hadCtl = !!navigator.serviceWorker.controller; navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadCtl && !reloaded) { reloaded = true; store.flushAll && Promise.resolve(store.flushAll()).finally(() => location.reload()); } }); }
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
     applySettings();
     LS.i18n.start();
