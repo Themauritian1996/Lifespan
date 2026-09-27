@@ -6,8 +6,23 @@
   const esc = C.esc;
   const clamp = LS.util.clamp;
 
-  /* ---------- Formats (fr-FR) ---------- */
-  const nf = (d) => new Intl.NumberFormat('fr-FR', { minimumFractionDigits: d, maximumFractionDigits: d });
+  /* ---------- Formats (langue choisie) et unités d'affichage ---------- */
+  const LOC = LS.i18n.locale;
+  const nf = (d) => new Intl.NumberFormat(LOC, { minimumFractionDigits: d, maximumFractionDigits: d });
+  // Conversion d'affichage : les valeurs sont toujours stockées en kg / cm / g/L
+  function U(id) {
+    const P = LS.Prefs.get();
+    if (id === 'weight' && P.wUnit === 'lb') return { f: 2.20462, unit: 'lb', step: 1, d: 0 };
+    if (P.lab === 'mmol') {
+      if (id === 'ldl' || id === 'hdl') return { f: 2.586, unit: 'mmol/L', step: 0.05, d: 2 };
+      if (id === 'tg') return { f: 1.129, unit: 'mmol/L', step: 0.05, d: 2 };
+      if (id === 'glucose') return { f: 5.551, unit: 'mmol/L', step: 0.1, d: 1 };
+    }
+    return null;
+  }
+  const toUi = (id, x) => { const u = U(id); return u && x != null ? +(x * u.f).toFixed(u.d + 1) : x; };
+  const fromUi = (id, x) => { const u = U(id); return u ? x / u.f : x; };
+  const hIn = () => LS.Prefs.get().hUnit === 'in';
   const F0 = nf(0), F1 = nf(1), F2 = nf(2);
   const f1 = (x) => F1.format(x), f0 = (x) => F0.format(x);
   const sign = (x, d = 1, unit = '') => (x > 0.049 ? '+' : x < -0.049 ? '−' : '±') + nf(d).format(Math.abs(x)) + unit;
@@ -21,8 +36,9 @@
     if (val == null) return 'Inconnu';
     if (v.kind === 'select') { const o = v.options.find((o) => o[0] === val); return o ? o[1] : String(val); }
     if (v.kind === 'bool') return val ? 'Oui' : 'Non';
-    const d = v.step < 0.1 ? 2 : v.step < 1 ? 1 : 0;
-    let s = nf(d).format(val) + (v.unit ? ' ' + v.unit : '');
+    const u = U(v.id);
+    const d = u ? u.d : v.step < 0.1 ? 2 : v.step < 1 ? 1 : 0;
+    let s = nf(d).format(u ? val * u.f : val) + (u ? ' ' + u.unit : v.unit ? ' ' + v.unit : '');
     if (v.id === 'weight' && p && p.height) s += ' · IMC ' + f1(val / Math.pow(p.height / 100, 2));
     return s;
   }
@@ -73,26 +89,23 @@
   const lsSet = (k, v) => { try { localStorage.setItem(k, v); return true; } catch (e) { return false; } };
   const lsDel = (k) => { try { localStorage.removeItem(k); } catch (e) { /* rien */ } };
   const store = {
-    data: null, key: null, salt: null, _chain: Promise.resolve(),
+    data: null, key: null, salt: null, mode: 'local', _chain: Promise.resolve(),
     hasVault() { return !!lsGet(VKEY); },
     load(raw) {
       let d = raw || null;
       if (!d) { try { d = JSON.parse(lsGet(KEY) || 'null'); } catch (e) { d = null; } }
-      if (!d || !d.profiles || !Object.keys(d.profiles).length) {
-        const ex = makeExample();
-        d = { v: 1, activeId: ex.id, profiles: { [ex.id]: ex }, settings: {} };
-        this.data = d; this.save();
-      }
+      if (!d || !d.profiles) d = { v: 1, activeId: null, profiles: {}, settings: {} };
       d.settings = Object.assign({ theme: 'system', accent: 'signal', lastBackup: null, fired: {} }, d.settings);
       d.settings.reminders = Object.assign({ checkin: { on: false, time: '20:00' } }, d.settings.reminders);
       Object.values(d.profiles).forEach((p) => {
         p.values = Object.assign(LS.defaultValues(), p.values); p.history = p.history || []; p.checkins = p.checkins || {};
         p.badges = p.badges || {}; p.xp = p.xp || 0; p.quests = p.quests || []; p.xpLog = p.xpLog || {};
       });
-      if (!d.profiles[d.activeId]) d.activeId = Object.keys(d.profiles)[0];
+      if (!d.profiles[d.activeId]) d.activeId = Object.keys(d.profiles)[0] || null;
       this.data = d;
     },
     save() {
+      if (this.mode === 'account') { LS.Cloud.persist(this.data); return; }
       if (!this.key) { lsSet(KEY, JSON.stringify(this.data)); return; }
       const snapshot = JSON.stringify(this.data), key = this.key, salt = this.salt;
       this._chain = this._chain.then(async () => {
@@ -108,6 +121,7 @@
       this.key = key; this.salt = v.salt;
       this.load(JSON.parse(text));
     },
+    flushAll() { return this.mode === 'account' ? LS.Cloud.flush() : this._chain; },
     async setCode(code) { this.salt = Vault.newSalt(); this.key = await Vault.derive(code, this.salt); this.save(); await this._chain; },
     removeCode() { this.key = null; this.salt = null; lsSet(KEY, JSON.stringify(this.data)); lsDel(VKEY); }
   };
@@ -279,7 +293,7 @@
   }
 
   /* ---------- Quêtes personnelles (modulables, répétables) ---------- */
-  const DOW = ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
+  const DOW = LS.i18n.lang === 'en' ? ['M', 'T', 'W', 'T', 'F', 'S', 'S'] : ['L', 'M', 'M', 'J', 'V', 'S', 'D'];
   const DOW_LONG = ['lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi', 'dimanche'];
   const dowOf = (d) => (new Date(d).getDay() + 6) % 7;
   const qTarget = (q) => (q.kind === 'count' ? Math.max(1, q.target || 1) : 1);
@@ -326,7 +340,7 @@
   function freqText(q) {
     if (q.freq === 'days') return (q.days || []).length === 7 ? 'Chaque jour' : (q.days || []).slice().sort().map((i) => DOW_LONG[i].slice(0, 3) + '.').join(' ');
     if (q.freq === 'weekly') return (q.perWeek || 1) + '× par semaine';
-    if (q.freq === 'once') return 'Une fois' + (q.date ? ' · ' + new Date(q.date + 'T12:00').toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' }) : '');
+    if (q.freq === 'once') return 'Une fois' + (q.date ? ' · ' + new Date(q.date + 'T12:00').toLocaleDateString(LOC, { day: 'numeric', month: 'short' }) : '');
     return 'Chaque jour';
   }
   function perfectDay(prof, d) {
@@ -361,7 +375,7 @@
   const nativeLN = () => (isNative() ? (window.capacitorLocalNotifications && window.capacitorLocalNotifications.LocalNotifications) || (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.LocalNotifications) || null : null);
   function reminderItems() {
     const prof = active(), R = store.data.settings.reminders, out = [];
-    if (prof.example) return out; // pas de rappels pour le profil de démonstration
+    if (!prof || prof.example) return out; // pas de rappels pour le profil de démonstration
     if (R.checkin.on) out.push({ id: 1, kind: 'checkin', title: 'Lifespan · check-in du jour', body: 'Note ta journée en 30 secondes (+20 XP).', time: R.checkin.time });
     prof.quests.forEach((q, i) => {
       if (q.archived || !q.reminder) return;
@@ -392,7 +406,7 @@
   }
   // Web : vérification périodique tant que l'app est ouverte (ou installée et active)
   function checkWebReminders() {
-    if (isNative() || !store.data) return;
+    if (isNative() || !store.data || !active()) return;
     const now = new Date(), hm = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0'), tk = todayKey(now);
     const fired = store.data.settings.fired || (store.data.settings.fired = {});
     const prof = active();
@@ -499,7 +513,7 @@
         <nav aria-label="Navigation principale">${nav}</nav>
         <div class="rail-foot">
           <button class="profile-chip" data-open="profiles" type="button"><span class="avatar-dot" data-initial></span><span data-name></span></button>
-          <span class="label"><span class="live"></span>&nbsp; Données locales</span>
+          <span class="label"><span class="live"></span>&nbsp; <span data-sync>Données locales</span></span>
         </div>
       </aside>
       <header class="topbar">
@@ -516,6 +530,16 @@
   function currentRoute() { const h = (location.hash || '#now').slice(1); return h === 'profile' ? 'profile' : ROUTES.some((r) => r.id === h) ? h : 'now'; }
   function render() {
     const prof = active();
+    if (!prof) {
+      $$('[data-name]').forEach((el) => (el.textContent = 'Profil'));
+      $$('[data-initial]').forEach((el) => (el.textContent = '+'));
+      $$('.tab').forEach((t) => t.setAttribute('aria-current', 'false'));
+      const v = $('#view');
+      v.innerHTML = `<div class="empty-state"><h1>Bienvenue sur Lifespan</h1><p class="sub">Crée ton profil pour découvrir ton espérance de vie, tes années en bonne santé, tes leviers et tes projections. Deux minutes suffisent.</p>
+        <div class="row" style="justify-content:center"><button class="btn primary" type="button" data-open="edit" data-new="1">${icon('plus')} Créer mon profil</button><button class="btn" type="button" id="load-ex">Explorer avec un profil exemple</button></div></div>`;
+      $('#load-ex').addEventListener('click', () => { const ex = makeExample(); store.data.profiles[ex.id] = ex; store.data.activeId = ex.id; store.save(); invalidate(); render(); });
+      return;
+    }
     $$('[data-name]').forEach((el) => (el.textContent = prof.name));
     $$('[data-initial]').forEach((el) => (el.textContent = (prof.name || '?').trim().charAt(0).toUpperCase()));
     let r = currentRoute();
@@ -527,7 +551,9 @@
   }
   const hostTheme = document.documentElement.getAttribute('data-theme'); // thème imposé par un hôte éventuel
   function applySettings() {
-    const s = store.data.settings, root = document.documentElement;
+    const s = LS.Prefs.get(), root = document.documentElement;
+    root.style.setProperty('--zoom', s.zoom || 1);
+    if (s.motion === 'reduce') root.setAttribute('data-motion', 'reduce'); else root.removeAttribute('data-motion');
     if (s.theme === 'system') { if (hostTheme) root.setAttribute('data-theme', hostTheme); else root.removeAttribute('data-theme'); } else root.setAttribute('data-theme', s.theme);
     if (s.accent === 'signal') root.removeAttribute('data-accent'); else root.setAttribute('data-accent', s.accent);
   }
@@ -574,7 +600,7 @@
       ${prof.example ? `<div class="banner"><span><b>Profil exemple.</b> Ces chiffres sont ceux d'Alex, un personnage fictif. Crée ton profil pour voir les tiens.</span><button class="btn primary sm" data-open="edit" data-new="1" type="button">${icon('plus')} Créer mon profil</button></div>` : ''}
       ${!prof.example && Object.keys(prof.checkins).length + prof.history.length > 3 && (!store.data.settings.lastBackup || Date.now() - new Date(store.data.settings.lastBackup) > 30 * 864e5) ? `<div class="banner"><span><b>Pense à sauvegarder ta progression.</b> Tes données restent sur cet appareil : une sauvegarde chiffrée te protège en cas de perte ou de changement de téléphone.</span><button class="btn sm" data-open="profiles" data-tab="sec" type="button">Sauvegarder</button></div>` : ''}
       <div class="page-head">
-        <div><div class="label"><span class="live"></span>&nbsp; ${esc(new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
+        <div><div class="label"><span class="live"></span>&nbsp; ${esc(new Date().toLocaleDateString(LOC, { weekday: 'long', day: 'numeric', month: 'long' }))}</div>
           <h1>${esc(prof.name)}, ${f0(Math.floor(ev.age))} ans</h1>
           <p class="sub">${prof.sex === 'F' ? 'Femme' : 'Homme'} · ${esc(country.label)} · comparé à la population ${esc(country.label === 'France' ? 'française' : 'de référence')} du même âge et du même sexe.</p></div>
         <div class="row"><button class="btn sm" data-open="edit" type="button">Modifier mes valeurs</button><a class="btn primary sm" href="#sim">${icon('sim')} Simuler un changement</a></div>
@@ -752,9 +778,9 @@
     const P = ((shown - v.min) / (v.max - v.min)) * 100;
     const bt = base != null && base !== undefined ? `<span class="base-tick" style="left:calc(11px + (100% - 22px) * ${(clamp(base, v.min, v.max) - v.min) / (v.max - v.min)})"></span>` : '';
     const tg = opts.target != null ? `<span class="target-tick" style="left:calc(11px + (100% - 22px) * ${(clamp(opts.target, v.min, v.max) - v.min) / (v.max - v.min)})" title="Cible"></span>` : '';
-    const dv = base != null && val != null && changed ? `<span class="delta ${deltaClass(val - base)}" style="color:var(--accent)">${val > base ? '+' : '−'}${nf(v.step < 0.1 ? 2 : v.step < 1 ? 1 : 0).format(Math.abs(val - base))}</span> ` : '';
+    const dv = base != null && val != null && changed ? `<span class="delta ${deltaClass(val - base)}" style="color:var(--accent)">${val > base ? '+' : '−'}${nf(U(v.id) ? U(v.id).d : v.step < 0.1 ? 2 : v.step < 1 ? 1 : 0).format(Math.abs(toUi(v.id, val) - toUi(v.id, base)))}</span> ` : '';
     return `<div class="ctl" data-ctl="${v.id}"><div class="ctl-top"><label class="ctl-name" for="c-${opts.pre || ''}${v.id}">${esc(v.label)}</label><span class="ctl-val">${dv}<b data-out="${v.id}">${esc(fmtVal(v, val, Object.assign({}, p, opts.values || {})))}</b></span></div>
-      <div class="range-wrap">${bt}${tg}<input type="range" id="c-${opts.pre || ''}${v.id}" data-range="${v.id}" min="${v.min}" max="${v.max}" step="${v.step}" value="${shown}" style="--p:${P}%" class="${changed ? 'changed' : ''}" ${unknown ? 'disabled' : ''} aria-valuetext="${esc(fmtVal(v, val, p))}"></div>
+      <div class="range-wrap">${bt}${tg}<input type="range" id="c-${opts.pre || ''}${v.id}" data-range="${v.id}" min="${toUi(v.id, v.min)}" max="${toUi(v.id, v.max)}" step="${U(v.id) ? U(v.id).step : v.step}" value="${toUi(v.id, shown)}" style="--p:${P}%" class="${changed ? 'changed' : ''}" ${unknown ? 'disabled' : ''} aria-valuetext="${esc(fmtVal(v, val, p))}"></div>
       ${v.opt ? `<label class="unknown small muted"><span class="toggle"><input type="checkbox" data-unknown="${v.id}" ${unknown ? 'checked' : ''}><span></span></span>Je ne connais pas cette valeur</label>` : ''}${help}</div>`;
   }
 
@@ -839,7 +865,7 @@
     ctls.addEventListener('input', (e) => {
       const r = e.target.closest('[data-range]');
       if (!r) return;
-      const id = r.dataset.range, v = VAR[id], val = parseFloat(r.value);
+      const id = r.dataset.range, v = VAR[id], val = fromUi(id, parseFloat(r.value));
       simState.values[id] = val;
       r.style.setProperty('--p', ((val - v.min) / (v.max - v.min)) * 100 + '%');
       r.classList.toggle('changed', val !== prof.values[id]);
@@ -899,7 +925,7 @@
         <div class="row"><div class="seg" id="t-metric" role="group" aria-label="Indicateur">${Object.entries(METRICS).map(([k, m]) => `<button type="button" data-k="${k}" aria-pressed="${k === timeState.metric}">${m.label}</button>`).join('')}</div>
         <div class="seg" id="t-years" role="group" aria-label="Horizon">${[1, 3, 5, 10].map((y) => `<button type="button" data-y="${y}" aria-pressed="${y === timeState.years}">${y} an${y > 1 ? 's' : ''}</button>`).join('')}</div></div></div>
       <div class="kpis">
-        <div class="tile"><span class="label">Depuis le début</span><span class="big s">${first ? sign(dStart) : '—'}<span class="unit">ANS</span></span><span class="xs muted">${first ? 'depuis le ' + new Date(first.date).toLocaleDateString('fr-FR') : 'Enregistre ton profil pour démarrer l\'historique'}</span></div>
+        <div class="tile"><span class="label">Depuis le début</span><span class="big s">${first ? sign(dStart) : '—'}<span class="unit">ANS</span></span><span class="xs muted">${first ? 'depuis le ' + new Date(first.date).toLocaleDateString(LOC) : 'Enregistre ton profil pour démarrer l\'historique'}</span></div>
         <div class="tile"><span class="label">Aujourd'hui</span><span class="big s">${f1(cur)}<span class="unit">ANS</span></span><span class="xs muted">${M.label.toLowerCase()}</span></div>
         <div class="tile"><span class="label">Dans ${timeState.years} an${timeState.years > 1 ? 's' : ''} · maintien</span><span class="big s">${f1(lastM[timeState.metric])}<span class="unit">ANS</span></span><span class="xs muted">si rien ne change</span></div>
         <div class="tile"><span class="label">Dans ${timeState.years} an${timeState.years > 1 ? 's' : ''} · objectif</span><span class="big s" style="color:var(--accent)">${lastG ? f1(lastG[timeState.metric]) : '—'}<span class="unit">ANS</span></span><span class="xs muted">${lastG ? sign(goalGain) + ' ans vs maintien' : 'Aucun objectif en cours'}</span></div>
@@ -923,7 +949,7 @@
           <div class="legend"><span style="color:var(--text)"><i></i>Vécu</span><span style="color:var(--muted)"><i></i>Attendu (${f1(c.ev.leTotal)} ans)</span><span style="color:var(--accent)"><i></i>Gagné avec l'objectif</span></div></div>
       </div>
       <div class="section-title"><h2>Journal</h2><span class="label">instantanés du profil</span></div>
-      <div class="tile">${hist.length ? hist.slice().reverse().map((h, i, arr) => { const prev = arr[i + 1]; const d = prev ? h.leTotal - prev.leTotal : 0; return `<div class="goal-row"><div><div>${new Date(h.date).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}</div><div class="xs muted">${prev ? changesText(prof.history[prof.history.length - 1 - i - 1].values, prof.history[prof.history.length - 1 - i].values) : 'Premier instantané'}</div></div><div style="text-align:right"><div class="big s">${f1(h.leTotal)}</div>${prev ? `<span class="delta ${deltaClass(d)}">${sign(d)} an</span>` : ''}</div></div>`; }).join('') : '<p class="small muted">Chaque fois que tu enregistres ton profil, un instantané daté est ajouté ici.</p>'}</div>`;
+      <div class="tile">${hist.length ? hist.slice().reverse().map((h, i, arr) => { const prev = arr[i + 1]; const d = prev ? h.leTotal - prev.leTotal : 0; return `<div class="goal-row"><div><div>${new Date(h.date).toLocaleDateString(LOC, { day: 'numeric', month: 'long', year: 'numeric' })}</div><div class="xs muted">${prev ? changesText(prof.history[prof.history.length - 1 - i - 1].values, prof.history[prof.history.length - 1 - i].values) : 'Premier instantané'}</div></div><div style="text-align:right"><div class="big s">${f1(h.leTotal)}</div>${prev ? `<span class="delta ${deltaClass(d)}">${sign(d)} an</span>` : ''}</div></div>`; }).join('') : '<p class="small muted">Chaque fois que tu enregistres ton profil, un instantané daté est ajouté ici.</p>'}</div>`;
 
     const mv = (arr) => arr.map((o) => ({ x: o.date, y: o[timeState.metric] }));
     const series = [];
@@ -948,7 +974,7 @@
     return t;
   }
   function changesText(a, b) {
-    const ch = VARS.filter((v) => a[v.id] !== b[v.id] && v.lhr).slice(0, 4).map((v) => `${v.short} ${fmtVal(v, a[v.id])} → ${fmtVal(v, b[v.id])}`);
+    const ch = VARS.filter((v) => a[v.id] !== b[v.id] && v.lhr).slice(0, 4).map((v) => `${LS.i18n.t(v.short)} ${LS.i18n.t(fmtVal(v, a[v.id]))} → ${LS.i18n.t(fmtVal(v, b[v.id]))}`);
     return ch.length ? ch.join(' · ') : 'Aucun changement de valeur';
   }
   function habitsMet(ci) {
@@ -962,13 +988,13 @@
   }
   function renderCalendar(prof, month) {
     const box = $('#cal'); if (!box) return;
-    $('#cal-title').textContent = month.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' });
+    $('#cal-title').textContent = month.toLocaleDateString(LOC, { month: 'long', year: 'numeric' });
     const start = new Date(month); const dow = (start.getDay() + 6) % 7; start.setDate(1 - dow);
     const milestones = new Set();
     (prof.history || []).forEach((h) => milestones.add(todayKey(h.date)));
     if (prof.goal && prof.goal.deadline) milestones.add(todayKey(prof.goal.deadline));
     const tk = todayKey();
-    let s = ['L', 'M', 'M', 'J', 'V', 'S', 'D'].map((d) => `<div class="dow">${d}</div>`).join('');
+    let s = DOW.map((d) => `<div class="dow" data-notr>${d}</div>`).join('');
     for (let i = 0; i < 42; i++) {
       const d = new Date(start); d.setDate(start.getDate() + i);
       const k = todayKey(d), ci = prof.checkins[k];
@@ -1045,7 +1071,7 @@
       let prog = '';
       if (!got && b.prog) { const [cur, goal] = b.prog(prof); prog = `<div class="prog"><i style="width:${clamp(cur / goal, 0, 1) * 100}%"></i></div><span class="xs muted">${f0(Math.min(cur, goal))} / ${goal}</span>`; }
       const fresh = got && (Date.now() - new Date(prof.badges[b.id]) < 3 * 864e5);
-      return `<div class="badge ${got ? '' : 'locked'} ${fresh ? 'new' : ''}" title="${got ? 'Obtenu le ' + new Date(prof.badges[b.id]).toLocaleDateString('fr-FR') : 'À débloquer'}">${glyphSvg(b.glyph, got)}<span>${esc(b.name)}</span>${b.tier ? `<span class="tier">${b.tier}</span>` : ''}${prog}</div>`;
+      return `<div class="badge ${got ? '' : 'locked'} ${fresh ? 'new' : ''}" title="${got ? 'Obtenu le ' + new Date(prof.badges[b.id]).toLocaleDateString(LOC) : 'À débloquer'}">${glyphSvg(b.glyph, got)}<span>${esc(b.name)}</span>${b.tier ? `<span class="tier">${b.tier}</span>` : ''}${prog}</div>`;
     };
     view.innerHTML = `
       <div class="page-head"><div><h1>Quêtes</h1><p class="sub">Crée tes propres quêtes, note ta journée, gagne de l'XP et débloque des badges. Chaque petite action compte.</p></div>
@@ -1067,7 +1093,7 @@
           <div class="row"><button class="btn sm" type="button" data-qnew>${icon('plus')} Créer une quête</button><button class="btn sm ghost" type="button" data-open="profiles" data-tab="rem">Régler mes rappels</button></div>
         </div>
         <form class="tile span-2 c6 w7" id="checkin" autocomplete="off">
-          <div class="tile-head"><h2>Check-in du jour</h2><span class="label">${now.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })}</span></div>
+          <div class="tile-head"><h2>Check-in du jour</h2><span class="label">${now.toLocaleDateString(LOC, { day: 'numeric', month: 'short' })}</span></div>
           <div class="checkin-grid">
             ${[['steps', 'Pas', 0, 50000, 100], ['active', 'Minutes actives', 0, 600, 5], ['sleep', 'Sommeil (h)', 0, 14, 0.25], ['drinks', 'Verres d\'alcool', 0, 30, 1], ...(smoker ? [['cigs', 'Cigarettes', 0, 80, 1]] : []), ['stress', 'Stress (0–10)', 0, 10, 1], ['mood', 'Humeur (0–10)', 0, 10, 1]]
               .map(([k, l, mi, ma, stp]) => `<div class="field"><label for="ci-${k}">${l}</label><input type="number" inputmode="decimal" id="ci-${k}" name="${k}" min="${mi}" max="${ma}" step="${stp}" value="${d0[k] === '' || d0[k] == null ? '' : d0[k]}"></div>`).join('')}
@@ -1081,7 +1107,7 @@
         </div>
         <div class="tile span-2 c6 w12">
           <div class="tile-head"><h2>Objectif santé</h2>${g ? `<span class="chip accent">${sign(goalGain)} ans à terme</span>` : ''}</div>
-          ${g ? `<div class="xs muted">Échéance : ${new Date(g.deadline).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })} · ${Math.max(0, dayDiff(new Date(), g.deadline))} jours restants</div>
+          ${g ? `<div class="xs muted">Échéance : ${new Date(g.deadline).toLocaleDateString(LOC, { day: 'numeric', month: 'long', year: 'numeric' })} · ${Math.max(0, dayDiff(new Date(), g.deadline))} jours restants</div>
             <div class="grid" style="margin-top:4px">${Object.entries(g.targets).map(([id, t]) => `<div class="span-2 c3 w6">${goalRow(prof, id, t)}</div>`).join('')}</div>
             <div class="row"><a class="btn sm" href="#sim">Ajuster dans le simulateur</a><button class="btn sm danger" type="button" id="goal-del">Supprimer l'objectif</button></div><div id="goal-confirm"></div>`
             : `<p class="small muted">Pas encore d'objectif. Ouvre le simulateur, change une ou plusieurs habitudes, puis « Définir comme objectif ».</p><a class="btn primary sm" href="#sim">Ouvrir le simulateur</a>`}
@@ -1259,6 +1285,7 @@
      ========================================================= */
   const sciState = { dom: 'all' };
   function viewScience(view, prof) {
+    const EN = LS.i18n.lang === 'en';
     const c = ctxFor(prof), p = c.p;
     const srcIds = Object.keys(LS.SOURCES);
     const num = {}; srcIds.forEach((k, i) => (num[k] = i + 1));
@@ -1268,13 +1295,18 @@
       <div class="page-head"><div><h1>Science</h1><p class="sub">Chaque chiffre de Lifespan vient d'une étude publiée. Voici les formules, les courbes, les tests et les sources.</p></div></div>
       <div class="grid">
         <div class="tile span-2 c3 w6"><h2>Ce que Lifespan calcule</h2><div class="prose small">
-          <p>Lifespan estime ton <strong>espérance de vie</strong>, tes <strong>années en bonne santé</strong>, ton <strong>âge de risque</strong> et tes <strong>risques de maladie</strong> à partir de ${VARS.filter((v) => v.lhr).length} variables et de ${srcIds.length} sources.</p>
+          ${EN ? `<p>Lifespan estimates your <strong>life expectancy</strong>, <strong>healthy years</strong>, <strong>risk age</strong> and <strong>disease risks</strong> from ${VARS.filter((v) => v.lhr).length} variables and ${srcIds.length} sources.</p>
+          <p>Effects mostly come from <strong>observational studies</strong>: they are associations. When randomized trials exist (blood pressure, LDL), the model uses them first.</p>
+          <p>The "Happiness" and "Stress" figures are <strong>indicative</strong> (grade C): they show a trend, not a measurement.</p></div></div>
+        <div class="tile span-2 c3 w6"><h2>What Lifespan is not</h2><div class="prose small">
+          <p>It is <strong>not a medical device</strong> nor a diagnosis. Two people with the same values will not live the same life: the model describes averages.</p>
+          <p>Without an account, your data stays <strong>on your device</strong>. With an account, it is <strong>end-to-end encrypted</strong> before being saved online. No tracker.</p>` : `<p>Lifespan estime ton <strong>espérance de vie</strong>, tes <strong>années en bonne santé</strong>, ton <strong>âge de risque</strong> et tes <strong>risques de maladie</strong> à partir de ${VARS.filter((v) => v.lhr).length} variables et de ${srcIds.length} sources.</p>
           <p>Les effets viennent surtout d'<strong>études observationnelles</strong> : ce sont des associations. Quand des essais randomisés existent (tension, LDL), le modèle les privilégie.</p>
           <p>Les chiffres « Bonheur » et « Stress » sont <strong>indicatifs</strong> (grade C) : ils montrent une tendance, pas une mesure.</p></div></div>
         <div class="tile span-2 c3 w6"><h2>Ce que Lifespan n'est pas</h2><div class="prose small">
           <p>Ce n'est <strong>pas un dispositif médical</strong> ni un diagnostic. Deux personnes avec les mêmes valeurs n'auront pas la même vie : le modèle décrit des moyennes.</p>
-          <p>Tes données restent <strong>sur ton appareil</strong> (stockage local du navigateur). Aucun serveur, aucun traceur.</p>
-          <p>En cas de détresse psychologique en France : <strong>3114</strong> (24 h/24, gratuit).</p></div></div>
+          <p>Sans compte, tes données restent <strong>sur ton appareil</strong>. Avec un compte, elles sont <strong>chiffrées de bout en bout</strong> avant d'être sauvegardées en ligne. Aucun traceur.</p>`}
+          <p>${EN ? 'In psychological distress in France: <strong>3114</strong> (24/7, free). Elsewhere, call your local crisis line.' : 'En cas de détresse psychologique en France : <strong>3114</strong> (24 h/24, gratuit).'}</p></div></div>
       </div>
       <div class="section-title"><h2>Méthode</h2><span class="label">de tes valeurs à tes résultats</span></div>
       <ol class="pipeline" style="padding:0;margin:0">
@@ -1311,12 +1343,17 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
         <p class="xs muted" style="margin-top:10px">« M53 » = référence [53] de la matrice de paramétrage d'origine.</p></div>
       <div class="section-title"><h2>Limites</h2></div>
       <div class="tile prose small">
-        <p>Preuves quasi exclusivement <strong>observationnelles</strong> : confusion résiduelle, biais du « healthy user » et causalité inverse (surtout pour le bien-être, le long sommeil, l'alcool faible et le LDL bas).</p>
+        ${EN ? `<p>Evidence is almost entirely <strong>observational</strong>: residual confounding, healthy-user bias and reverse causation (especially for well-being, long sleep, light drinking and low LDL).</p>
+        <p><strong>High heterogeneity</strong> between studies (I² often > 70%) and varying definitions of "healthy" categories.</p>
+        <p>Many psychosocial associations <strong>weaken</strong> after adjusting for depression, health behaviours and socio-economic status.</p>
+        <p>Drugs: no true dose-response curve; SMRs come from treatment populations and are probably <strong>overestimated</strong> for occasional use (shrunk in the model).</p>
+        <p>10-year disease incidences are <strong>orders of magnitude</strong> (Western Europe), not validated clinical scores such as SCORE2.</p>
+        <p>Life expectancies outside France are recent approximations and may differ from official tables by a few months.</p>` : `<p>Preuves quasi exclusivement <strong>observationnelles</strong> : confusion résiduelle, biais du « healthy user » et causalité inverse (surtout pour le bien-être, le long sommeil, l'alcool faible et le LDL bas).</p>
         <p><strong>Hétérogénéité élevée</strong> entre études (I² souvent &gt; 70 %) et définitions variables des catégories « saines ».</p>
         <p>Beaucoup d'associations psychosociales <strong>s'atténuent</strong> après ajustement sur la dépression, les comportements de santé et le statut socio-économique.</p>
         <p>Drogues : pas de vraie courbe dose-réponse ; SMR issus de populations en traitement, probablement <strong>surestimés</strong> pour l'usage occasionnel (rétrécis dans le modèle).</p>
         <p>Les incidences de maladies à 10 ans sont des <strong>ordres de grandeur</strong> (Europe de l'Ouest), pas des scores cliniques validés comme SCORE2.</p>
-        <p>Les espérances de vie hors France sont des approximations récentes ; elles peuvent différer des tables officielles de quelques mois.</p>
+        <p>Les espérances de vie hors France sont des approximations récentes ; elles peuvent différer des tables officielles de quelques mois.</p>`}
       </div>`;
     $('#sci-dom').addEventListener('click', (e) => { const b = e.target.closest('[data-d]'); if (b) { sciState.dom = b.dataset.d; viewScience(view, prof); } });
   }
@@ -1365,66 +1402,103 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
     if (kind === 'profiles') return sheetProfiles(ds);
     if (kind === 'edit') return sheetEdit(ds && ds.new ? null : active());
   }
+  const SET_TABS = [['profiles', 'Profils'], ['account', 'Compte'], ['prefs', 'Préférences'], ['rem', 'Rappels'], ['data', 'Données']];
+  let setTab = 'profiles';
   function sheetProfiles(ds) {
-    const d = store.data;
-    const list = Object.values(d.profiles).map((p) => {
-      const age = Math.floor(E.ageAt(p.birth, new Date()));
-      return `<div class="profile-item ${p.id === d.activeId ? 'active' : ''}" data-pid="${p.id}"><span class="avatar-dot">${esc((p.name || '?').charAt(0).toUpperCase())}</span><div class="grow"><div>${esc(p.name)} ${p.example ? '<span class="chip">Exemple</span>' : ''}</div><div class="xs muted">${p.sex === 'F' ? 'Femme' : 'Homme'} · ${age} ans · niveau ${levelOf(p.xp)} · ${esc((LS.COUNTRIES[p.country] || LS.COUNTRIES.FR).label)}</div></div>
-        ${p.id === d.activeId ? '<span class="chip accent">Actif</span>' : `<button class="btn sm" type="button" data-use="${p.id}">Ouvrir</button>`}
-        <button class="icon-btn" type="button" data-del="${p.id}" aria-label="Supprimer ${esc(p.name)}">${icon('close')}</button></div><div data-confirm="${p.id}"></div>`;
-    }).join('');
-    const s = d.settings, R = s.reminders;
-    const notifState = isNative() ? 'app' : !('Notification' in window) ? 'none' : Notification.permission;
-    const lastB = s.lastBackup ? new Date(s.lastBackup).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' }) : 'jamais';
-    const back = sheet('Profil et réglages', `
-      <div class="profile-list">${list}</div>
-      <div class="row" style="margin-top:12px"><button class="btn primary sm" type="button" data-new-profile>${icon('plus')} Nouveau profil</button><button class="btn sm" type="button" data-edit-active>Modifier le profil actif</button></div>
-      <p class="xs muted" style="margin-top:8px">Chaque personne garde ses données sur son propre appareil. Plusieurs profils sur un même appareil : pratique pour un·e soignant·e ou une famille.</p>
-
+    if (ds && ds.tab) setTab = ds.tab === 'sec' ? 'data' : ds.tab;
+    const d = store.data, s = d.settings, R = s.reminders, P = LS.Prefs.get(), Cl = LS.Cloud, sess = Cl.session();
+    const tabs = `<div class="seg set-tabs" role="tablist">${SET_TABS.map(([k, l]) => `<button type="button" role="tab" data-settab="${k}" aria-pressed="${setTab === k}">${l}</button>`).join('')}</div>`;
+    let body = '';
+    if (setTab === 'profiles') {
+      const list = Object.values(d.profiles).map((p) => {
+        const age = Math.floor(E.ageAt(p.birth, new Date()));
+        return `<div class="profile-item ${p.id === d.activeId ? 'active' : ''}"><span class="avatar-dot">${esc((p.name || '?').charAt(0).toUpperCase())}</span><div class="grow"><div>${esc(p.name)} ${p.example ? '<span class="chip">Exemple</span>' : ''}</div><div class="xs muted">${p.sex === 'F' ? 'Femme' : 'Homme'} · ${age} ans · niveau ${levelOf(p.xp)}</div></div>
+          ${p.id === d.activeId ? '<span class="chip accent">Actif</span>' : `<button class="btn sm" type="button" data-use="${p.id}">Ouvrir</button>`}
+          <button class="icon-btn" type="button" data-del="${p.id}" aria-label="Supprimer ${esc(p.name)}">${icon('close')}</button></div><div data-confirm="${p.id}"></div>`;
+      }).join('');
+      body = `<div class="profile-list">${list || '<p class="small muted">Aucun profil pour le moment.</p>'}</div>
+        <div class="row" style="margin-top:12px"><button class="btn primary sm" type="button" data-new-profile>${icon('plus')} Nouveau profil</button>${active() ? '<button class="btn sm" type="button" data-edit-active>Modifier le profil actif</button>' : ''}</div>
+        <p class="xs muted" style="margin-top:8px">Plusieurs profils possibles sur un même compte ou appareil : pratique pour une famille ou un·e soignant·e. Tu peux supprimer le profil exemple à tout moment.</p>`;
+    } else if (setTab === 'account') {
+      if (store.mode === 'account' && sess) {
+        const st = Cl.status();
+        const stTxt = st.state === 'synced' ? 'Synchronisé' + (st.at ? ' · ' + new Date(st.at).toLocaleTimeString(LOC, { hour: '2-digit', minute: '2-digit' }) : '') : st.state === 'saving' ? 'Synchronisation…' : st.state === 'offline' ? 'Hors ligne : les changements seront envoyés au retour du réseau' : 'Connecté';
+        body = `<div class="notice"><div class="stack" style="gap:4px"><span class="label">Connecté·e</span><b style="font-weight:500">${esc(sess.email)}</b><span class="xs muted">${esc(stTxt)}</span></div></div>
+          <p class="small muted" style="margin-top:10px">Tes données sont chiffrées sur ton appareil avant d'être envoyées. Le serveur ne stocke qu'un bloc illisible : ni nous ni personne d'autre ne peut lire ton profil.</p>
+          <div class="set-row"><label class="row" for="a-keep"><span class="toggle"><input type="checkbox" id="a-keep" ${sess.keep ? 'checked' : ''}><span></span></span>Rester connecté·e sur cet appareil</label><span class="xs muted">Décoché : mot de passe demandé à chaque ouverture</span></div>
+          <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-signout>Se déconnecter</button><button class="btn sm" type="button" data-chpw>Changer le mot de passe</button><button class="btn sm danger" type="button" data-delacct>Supprimer mon compte</button></div>
+          <div data-acct-io></div>`;
+      } else {
+        body = `<p class="small muted">Tu utilises Lifespan <b style="color:var(--text);font-weight:500">sans compte</b> : tes données restent uniquement sur cet appareil.</p>
+          ${Cl.enabled ? `<p class="small muted">Crée un compte (e-mail + mot de passe, gratuit) pour retrouver tes données sur tous tes appareils. Tes profils actuels seront transférés et chiffrés de bout en bout.</p>
+            <div class="row"><button class="btn primary sm" type="button" data-go-signup>Créer un compte</button><button class="btn sm" type="button" data-go-signin>Se connecter</button></div>`
+            : `<div class="notice">Les comptes en ligne ne sont pas encore activés sur cette version.</div>`}
+          <hr class="hr" style="margin:16px 0">
+          <span class="label">Verrouillage de l'appareil</span>
+          ${Vault.ok ? (store.key
+            ? `<div class="notice" style="margin-top:8px">Coffre activé : données chiffrées (AES-256), code demandé à chaque ouverture.</div><div class="row" style="margin-top:8px"><button class="btn sm" type="button" data-lock-now>Verrouiller maintenant</button><button class="btn sm" type="button" data-code-change>Changer le code</button><button class="btn sm danger" type="button" data-code-off>Désactiver le code</button></div>`
+            : `<p class="small muted" style="margin-top:6px">Protège tes données par un code : elles seront chiffrées sur l'appareil. Garde ce code en lieu sûr, il ne peut pas être récupéré.</p><button class="btn sm" type="button" data-code-on>Protéger par un code</button>`)
+            : '<p class="small muted">Le chiffrement nécessite une adresse sécurisée (https).</p>'}
+          <div data-code-io></div>`;
+      }
+    } else if (setTab === 'prefs') {
+      const seg = (name, cur, opts) => `<div class="seg" role="group" data-pref="${name}">${opts.map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${String(cur) === String(k)}">${l}</button>`).join('')}</div>`;
+      body = `<div class="stack">
+        <span class="label">Langue</span>${seg('lang', P.lang, [['fr', 'Français'], ['en', 'English']])}
+        <span class="label" style="margin-top:8px">Thème</span>${seg('theme', P.theme, [['system', 'Système'], ['dark', 'Sombre'], ['light', 'Clair']])}
+        <span class="label" style="margin-top:8px">Couleur d'accent</span>
+        <div class="swatches" role="group" aria-label="Couleur d'accent">${[['signal', '#ff3b30', 'Rouge signal'], ['amber', '#ffb020', 'Ambre'], ['mint', '#3ddc97', 'Menthe'], ['ice', '#6cc5ff', 'Glace'], ['mono', '#f3f3f0', 'Blanc']].map(([k, c, l]) => `<button type="button" data-acc="${k}" aria-pressed="${P.accent === k}" style="background:${c}" aria-label="${l}" title="${l}"></button>`).join('')}</div>
+        <span class="label" style="margin-top:8px">Taille du texte</span>${seg('zoom', P.zoom, [[0.92, 'Compacte'], [1, 'Normale'], [1.1, 'Grande'], [1.22, 'Très grande']])}
+        <span class="label" style="margin-top:8px">Animations</span>${seg('motion', P.motion, [['auto', 'Activées'], ['reduce', 'Réduites']])}
+        <span class="label" style="margin-top:8px">Poids</span>${seg('wUnit', P.wUnit, [['kg', 'Kilogrammes (kg)'], ['lb', 'Livres (lb)']])}
+        <span class="label" style="margin-top:8px">Taille</span>${seg('hUnit', P.hUnit, [['cm', 'Centimètres'], ['in', 'Pouces']])}
+        <span class="label" style="margin-top:8px">Analyses sanguines</span>${seg('lab', P.lab, [['gl', 'g/L (France)'], ['mmol', 'mmol/L (Canada, international)']])}
+      </div>
       <hr class="hr" style="margin:18px 0">
-      <section id="set-rem" class="stack"><span class="label">Rappels</span>
-        <div class="set-row"><label class="row" for="r-ci"><span class="toggle"><input type="checkbox" id="r-ci" ${R.checkin.on ? 'checked' : ''}><span></span></span>Rappel du check-in quotidien</label><input type="time" id="r-ci-time" value="${R.checkin.time}" aria-label="Heure du rappel"></div>
+      <div class="stack small muted"><span class="label">À propos</span><span>Lifespan 3.0 · outil d'éducation à la santé, pas un dispositif médical.</span><span>Code source ouvert : <a href="https://github.com/Themauritian1996/Lifespan" target="_blank" rel="noopener">github.com/Themauritian1996/Lifespan</a></span></div>`;
+    } else if (setTab === 'rem') {
+      const notifState = isNative() ? 'app' : !('Notification' in window) ? 'none' : Notification.permission;
+      body = `<div class="set-row"><label class="row" for="r-ci"><span class="toggle"><input type="checkbox" id="r-ci" ${R.checkin.on ? 'checked' : ''}><span></span></span>Rappel du check-in quotidien</label><input type="time" id="r-ci-time" value="${R.checkin.time}" aria-label="Heure du rappel"></div>
         <p class="xs muted">Chaque quête peut aussi avoir son propre rappel (bouton réglages de la quête).</p>
         ${notifState === 'app' ? '<div class="notice">Application Android : les rappels arrivent comme des notifications du téléphone, même app fermée.</div>'
           : notifState === 'none' ? '<div class="notice warn">Ce navigateur ne gère pas les notifications. Utilise l\'ajout à l\'agenda ci-dessous.</div>'
           : `<div class="notice ${notifState === 'denied' ? 'warn' : ''}"><div class="stack" style="gap:6px"><span>${notifState === 'granted' ? 'Notifications autorisées.' : notifState === 'denied' ? 'Notifications bloquées : réautorise-les dans les réglages du navigateur.' : 'Autorise les notifications pour recevoir les rappels.'} Sur le site, un rappel s'affiche quand Lifespan est ouvert ou installé sur l'écran d'accueil. Pour un rappel garanti même téléphone verrouillé, ajoute-les à ton agenda ou utilise l'app Android.</span>${notifState === 'default' ? '<button class="btn sm primary" type="button" data-notif style="align-self:flex-start">Autoriser les notifications</button>' : ''}</div></div>`}
-        <div class="row"><button class="btn sm" type="button" data-ics>Ajouter mes rappels à mon agenda (.ics)</button><button class="btn sm ghost" type="button" data-test-notif>Tester une notification</button></div>
-        <div data-rem-io></div>
-      </section>
-
-      <hr class="hr" style="margin:18px 0">
-      <section id="set-sec" class="stack"><span class="label">Sécurité et sauvegarde</span>
-        ${Vault.ok ? (store.key
-          ? `<div class="notice"><div class="stack" style="gap:6px"><b style="font-weight:500">Coffre activé</b><span>Tes données sont chiffrées (AES-256) sur cet appareil. Le code est demandé à chaque ouverture.</span></div></div>
-             <div class="row"><button class="btn sm" type="button" data-lock-now>Verrouiller maintenant</button><button class="btn sm" type="button" data-code-change>Changer le code</button><button class="btn sm danger" type="button" data-code-off>Désactiver le code</button></div>`
-          : `<p class="small muted">Protège tes données par un code : elles seront chiffrées sur l'appareil et illisibles sans lui. <b style="color:var(--text);font-weight:500">Garde ce code en lieu sûr</b> : il ne peut pas être récupéré.</p>
-             <button class="btn sm primary" type="button" data-code-on style="align-self:flex-start">Protéger par un code</button>`)
-          : '<p class="small muted">Le chiffrement nécessite une adresse sécurisée (https). Il sera disponible sur la version en ligne.</p>'}
-        <div data-code-io></div>
-        <div class="set-row"><div><div>Sauvegarde</div><div class="xs muted">Dernière : ${esc(lastB)}. Une sauvegarde permet de changer de téléphone sans rien perdre.</div></div></div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" type="button" data-ics>Ajouter mes rappels à mon agenda (.ics)</button><button class="btn sm ghost" type="button" data-test-notif>Tester une notification</button></div>
+        <div data-rem-io></div>`;
+    } else if (setTab === 'data') {
+      const lastB = s.lastBackup ? new Date(s.lastBackup).toLocaleDateString(LOC, { day: 'numeric', month: 'long', year: 'numeric' }) : 'jamais';
+      body = `<div class="set-row"><div><div>Sauvegarde</div><div class="xs muted">Dernière : ${esc(lastB)}. ${store.mode === 'account' ? 'Avec un compte, tes données sont déjà sauvegardées en ligne (chiffrées) ; un fichier reste utile comme copie de secours.' : 'Une sauvegarde permet de changer de téléphone sans rien perdre.'}</div></div></div>
         <div class="row"><button class="btn sm primary" type="button" data-export>Exporter une sauvegarde</button><label class="btn sm" for="imp-file">Importer un fichier</label><input type="file" id="imp-file" accept="application/json,.json,.lifespan" hidden><button class="btn sm ghost" type="button" data-paste>Coller une sauvegarde</button></div>
         <div data-io></div>
-      </section>
-
-      <hr class="hr" style="margin:18px 0">
-      <section class="stack"><span class="label">Apparence</span>
-        <div class="seg" role="group" aria-label="Thème" data-theme-seg>${[['system', 'Système'], ['dark', 'Sombre'], ['light', 'Clair']].map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${s.theme === k}">${l}</button>`).join('')}</div>
-        <span class="label" style="margin-top:8px">Couleur d'accent</span>
-        <div class="swatches" role="group" aria-label="Couleur d'accent">${[['signal', '#ff3b30', 'Rouge signal'], ['amber', '#ffb020', 'Ambre'], ['mint', '#3ddc97', 'Menthe'], ['ice', '#6cc5ff', 'Glace'], ['mono', '#f3f3f0', 'Blanc']].map(([k, c, l]) => `<button type="button" data-acc="${k}" aria-pressed="${s.accent === k}" style="background:${c}" aria-label="${l}" title="${l}"></button>`).join('')}</div>
-      </section>`);
-    if (ds && ds.tab) setTimeout(() => { const el = back.querySelector(ds.tab === 'sec' ? '#set-sec' : '#set-rem'); if (el) el.scrollIntoView({ block: 'start' }); }, 30);
-
+        <hr class="hr" style="margin:18px 0">
+        <span class="label">Remise à zéro</span>
+        <div class="row" style="margin-top:8px"><button class="btn sm" type="button" data-reset-prog>Réinitialiser ma progression</button><button class="btn sm danger" type="button" data-wipe>Effacer toutes les données</button></div>
+        <p class="xs muted">« Réinitialiser » remet à zéro XP, badges, quêtes et check-ins du profil actif, sans toucher à tes valeurs de santé. « Effacer » supprime tous les profils ${store.mode === 'account' ? 'de ton compte' : 'de cet appareil'}.</p>
+        <div data-wipe-io></div>`;
+    }
+    const back = sheet('Profil et réglages', tabs + `<div class="set-body" style="margin-top:14px">${body}</div>`);
+    const again = () => { const y = back.querySelector('.sheet').scrollTop; sheetProfiles(); const sh = $('#sheet .sheet'); if (sh) sh.scrollTop = y; };
     const codeForm = (mode) => {
-      back.querySelector('[data-code-io]').innerHTML = `<div class="form-grid" style="margin-top:6px"><div class="field"><label for="code1">${mode === 'change' ? 'Nouveau code' : 'Code (au moins 4 caractères)'}</label><input type="password" id="code1" class="pin" autocomplete="new-password" inputmode="text"></div><div class="field"><label for="code2">Confirmer le code</label><input type="password" id="code2" class="pin" autocomplete="new-password"></div></div>
+      back.querySelector('[data-code-io]').innerHTML = `<div class="form-grid" style="margin-top:6px"><div class="field"><label for="code1">${mode === 'change' ? 'Nouveau code' : 'Code (au moins 4 caractères)'}</label><input type="password" id="code1" class="pin" autocomplete="new-password"></div><div class="field"><label for="code2">Confirmer le code</label><input type="password" id="code2" class="pin" autocomplete="new-password"></div></div>
         <div class="row" style="margin-top:8px"><button class="btn sm primary" type="button" data-code-save>Activer</button><button class="btn sm" type="button" data-code-cancel>Annuler</button></div><p class="small" data-code-err style="color:var(--bad)"></p>`;
       back.querySelector('#code1').focus();
     };
+    const pwForm = (kind) => {
+      const io = back.querySelector('[data-acct-io]');
+      io.innerHTML = kind === 'chpw'
+        ? `<div class="form-grid" style="margin-top:12px"><div class="field"><label for="pw-cur">Mot de passe actuel</label><input type="password" id="pw-cur" autocomplete="current-password"></div><div class="field"><label for="pw-new">Nouveau mot de passe (8 caractères min.)</label><input type="password" id="pw-new" autocomplete="new-password"></div></div><div class="row" style="margin-top:8px"><button class="btn sm primary" type="button" data-chpw-go>Changer</button></div><p class="small" data-acct-err style="color:var(--bad)"></p>`
+        : `<div class="confirm" style="margin-top:12px;flex-direction:column;align-items:stretch">Supprimer définitivement ton compte et toutes tes données en ligne ? Cette action est irréversible.<div class="field"><label for="pw-del">Mot de passe pour confirmer</label><input type="password" id="pw-del" autocomplete="current-password"></div><div class="row"><button class="btn sm danger" type="button" data-delacct-go>Supprimer mon compte</button></div><p class="small" data-acct-err style="color:var(--bad)"></p></div>`;
+      io.querySelector('input').focus();
+    };
     back.addEventListener('change', (e) => {
-      if (e.target.id === 'r-ci') { R.checkin.on = e.target.checked; if (R.checkin.on) { award(active(), 'reminder'); askNotif(); } store.save(); syncReminders(true); toast(R.checkin.on ? 'Rappel du check-in activé à ' + R.checkin.time : 'Rappel désactivé'); }
+      if (e.target.id === 'r-ci') { R.checkin.on = e.target.checked; if (R.checkin.on && active()) { award(active(), 'reminder'); askNotif(); } store.save(); syncReminders(true); toast(R.checkin.on ? 'Rappel du check-in activé à ' + R.checkin.time : 'Rappel désactivé'); }
       if (e.target.id === 'r-ci-time') { R.checkin.time = e.target.value || '20:00'; store.save(); syncReminders(false); }
+      if (e.target.id === 'a-keep') { Cl.setKeep(e.target.checked); toast(e.target.checked ? 'Tu resteras connecté·e sur cet appareil' : 'Mot de passe demandé à la prochaine ouverture'); }
     });
     back.addEventListener('click', async (e) => {
       const t = e.target;
+      const tb = t.closest('[data-settab]'); if (tb) { setTab = tb.dataset.settab; sheetProfiles(); return; }
+      // Profils
       const use = t.closest('[data-use]'), del = t.closest('[data-del]');
       if (use) { d.activeId = use.dataset.use; simState.forId = null; invalidate(); store.save(); syncReminders(false); closeSheet(); render(); }
       if (del) {
@@ -1434,26 +1508,48 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
       const yes = t.closest('[data-del-yes]');
       if (yes) {
         delete d.profiles[yes.dataset.delYes];
-        if (!Object.keys(d.profiles).length) { const ex = makeExample(); d.profiles[ex.id] = ex; }
-        if (!d.profiles[d.activeId]) d.activeId = Object.keys(d.profiles)[0];
-        simState.forId = null; invalidate(); store.save(); render(); sheetProfiles();
+        if (!d.profiles[d.activeId]) d.activeId = Object.keys(d.profiles)[0] || null;
+        simState.forId = null; invalidate(); store.save(); render(); again(); toast('Profil supprimé');
       }
       if (t.closest('[data-del-no]')) t.closest('.confirm').remove();
       if (t.closest('[data-new-profile]')) sheetEdit(null);
       if (t.closest('[data-edit-active]')) sheetEdit(active());
-      const th = t.closest('[data-theme-seg] [data-v]');
-      if (th) { s.theme = th.dataset.v; applySettings(); store.save(); back.querySelectorAll('[data-theme-seg] button').forEach((b) => b.setAttribute('aria-pressed', b === th)); refreshColors(); }
+      // Préférences
+      const pr = t.closest('[data-pref] [data-v]');
+      if (pr) {
+        const name = pr.parentElement.dataset.pref, raw = pr.dataset.v, val = name === 'zoom' ? parseFloat(raw) : raw;
+        LS.Prefs.set({ [name]: val });
+        if (name === 'lang') { await store.flushAll(); location.reload(); return; }
+        applySettings(); invalidate(); refreshColors(); again();
+      }
       const ac = t.closest('[data-acc]');
-      if (ac) { s.accent = ac.dataset.acc; applySettings(); store.save(); back.querySelectorAll('[data-acc]').forEach((b) => b.setAttribute('aria-pressed', b === ac)); refreshColors(); }
-      if (t.closest('[data-notif]')) { await askNotif(); sheetProfiles({ tab: 'rem' }); }
+      if (ac) { LS.Prefs.set({ accent: ac.dataset.acc }); applySettings(); refreshColors(); again(); }
+      // Rappels
+      if (t.closest('[data-notif]')) { await askNotif(); again(); }
       if (t.closest('[data-test-notif]')) testNotif();
       if (t.closest('[data-ics]')) {
         if (!reminderItems().length) { toast('Active d\'abord un rappel (check-in ou quête)'); return; }
-        const txt = icsText();
-        downloadFile('lifespan-rappels.ics', txt, 'text/calendar');
+        downloadFile('lifespan-rappels.ics', icsText(), 'text/calendar');
         back.querySelector('[data-rem-io]').innerHTML = '<p class="xs muted">Ouvre le fichier téléchargé : ton agenda (Google, Apple, Outlook) propose d\'ajouter les rappels récurrents.</p>';
       }
-      // Coffre
+      // Compte
+      if (t.closest('[data-go-signup]')) { closeSheet(); authScreen('signup', { migrate: true }); }
+      if (t.closest('[data-go-signin]')) { closeSheet(); authScreen('signin', { fromLocal: true }); }
+      if (t.closest('[data-signout]')) { await Cl.flush(); Cl.signOut(); location.hash = ''; location.reload(); }
+      if (t.closest('[data-chpw]')) pwForm('chpw');
+      if (t.closest('[data-delacct]')) pwForm('del');
+      if (t.closest('[data-chpw-go]')) {
+        const err = back.querySelector('[data-acct-err]'), cur = back.querySelector('#pw-cur').value, nw = back.querySelector('#pw-new').value;
+        if (nw.length < 8) { err.textContent = 'Le nouveau mot de passe doit contenir au moins 8 caractères.'; return; }
+        err.textContent = 'Changement…';
+        try { await Cl.changePassword(cur, nw); err.textContent = ''; toast('Mot de passe changé'); again(); } catch (x) { err.textContent = x.message; }
+      }
+      if (t.closest('[data-delacct-go]')) {
+        const err = back.querySelector('[data-acct-err]');
+        err.textContent = 'Suppression…';
+        try { await Cl.deleteAccount(back.querySelector('#pw-del').value); location.hash = ''; location.reload(); } catch (x) { err.textContent = x.message; }
+      }
+      // Coffre local
       if (t.closest('[data-code-on]') || t.closest('[data-code-change]')) codeForm(t.closest('[data-code-change]') ? 'change' : 'on');
       if (t.closest('[data-code-cancel]')) back.querySelector('[data-code-io]').innerHTML = '';
       if (t.closest('[data-code-save]')) {
@@ -1461,24 +1557,28 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
         if (a.length < 4) { err.textContent = 'Le code doit contenir au moins 4 caractères.'; return; }
         if (a !== b) { err.textContent = 'Les deux codes ne correspondent pas.'; return; }
         err.textContent = 'Chiffrement…';
-        try { await store.setCode(a); award(active(), 'secure'); store.save(); toast('Coffre activé : tes données sont chiffrées'); sheetProfiles(); }
+        try { await store.setCode(a); if (active()) award(active(), 'secure'); store.save(); toast('Coffre activé : tes données sont chiffrées'); again(); }
         catch (x) { err.textContent = 'Le chiffrement a échoué sur ce navigateur.'; }
       }
-      if (t.closest('[data-code-off]')) {
-        back.querySelector('[data-code-io]').innerHTML = `<div class="confirm">Désactiver le code ? Tes données seront de nouveau stockées sans chiffrement. <button class="btn sm danger" type="button" data-code-off-yes>Désactiver</button><button class="btn sm" type="button" data-code-cancel>Annuler</button></div>`;
-      }
-      if (t.closest('[data-code-off-yes]')) { store.removeCode(); toast('Code désactivé'); sheetProfiles(); }
+      if (t.closest('[data-code-off]')) back.querySelector('[data-code-io]').innerHTML = `<div class="confirm">Désactiver le code ? Tes données seront de nouveau stockées sans chiffrement. <button class="btn sm danger" type="button" data-code-off-yes>Désactiver</button><button class="btn sm" type="button" data-code-cancel>Annuler</button></div>`;
+      if (t.closest('[data-code-off-yes]')) { store.removeCode(); toast('Code désactivé'); again(); }
       if (t.closest('[data-lock-now]')) { await store._chain; location.reload(); }
-      // Sauvegardes
+      // Données
       if (t.closest('[data-export]')) exportForm(back);
       if (t.closest('[data-do-export]')) doExport(back);
       if (t.closest('[data-paste]')) back.querySelector('[data-io]').innerHTML = `<div class="field" style="margin-top:10px"><label for="imp-text">Colle le contenu d'une sauvegarde Lifespan</label><textarea id="imp-text"></textarea><button class="btn sm primary" type="button" data-imp-text>Importer</button></div>`;
       if (t.closest('[data-imp-text]')) doImport(back.querySelector('#imp-text').value, back);
       if (t.closest('[data-imp-pass]')) doImport(back._pending, back, back.querySelector('#imp-pass').value);
+      if (t.closest('[data-reset-prog]')) back.querySelector('[data-wipe-io]').innerHTML = `<div class="confirm" style="margin-top:10px">Remettre à zéro XP, badges, quêtes et check-ins de ce profil ? <button class="btn sm danger" type="button" data-reset-yes>Réinitialiser</button><button class="btn sm" type="button" data-wipe-no>Annuler</button></div>`;
+      if (t.closest('[data-wipe]')) back.querySelector('[data-wipe-io]').innerHTML = `<div class="confirm" style="margin-top:10px">Effacer tous les profils et tout l'historique ? Exporte une sauvegarde avant si tu veux les garder. <button class="btn sm danger" type="button" data-wipe-yes>Tout effacer</button><button class="btn sm" type="button" data-wipe-no>Annuler</button></div>`;
+      if (t.closest('[data-wipe-no]')) back.querySelector('[data-wipe-io]').innerHTML = '';
+      if (t.closest('[data-reset-yes]') && active()) { const p = active(); Object.assign(p, { xp: 0, xpLog: {}, badges: {}, quests: [], checkins: {} }); store.save(); syncReminders(false); closeSheet(); render(); toast('Progression réinitialisée'); }
+      if (t.closest('[data-wipe-yes]')) { d.profiles = {}; d.activeId = null; store.save(); syncReminders(false); closeSheet(); render(); toast('Toutes les données ont été effacées'); }
     });
-    back.querySelector('#imp-file').addEventListener('change', (e) => {
-      const f = e.target.files[0]; if (!f) return;
-      const r = new FileReader(); r.onload = () => doImport(String(r.result), back); r.readAsText(f);
+    const f = back.querySelector('#imp-file');
+    if (f) f.addEventListener('change', (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const r = new FileReader(); r.onload = () => doImport(String(r.result), back); r.readAsText(file);
     });
   }
   async function askNotif() {
@@ -1561,11 +1661,11 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
           <div class="field"><label for="e-name">Prénom ou pseudo</label><input type="text" id="e-name" maxlength="30" value="${esc(draft.name)}" placeholder="Ex. Camille"></div>
           <div class="field"><span class="lab">Sexe (biologique, pour les tables de mortalité)</span><div class="seg" role="group" data-sex>${[['F', 'Femme'], ['M', 'Homme']].map(([k, l]) => `<button type="button" data-v="${k}" aria-pressed="${draft.sex === k}">${l}</button>`).join('')}</div></div>
           <div class="field"><label for="e-age">Âge</label><input type="number" id="e-age" min="18" max="100" step="1" value="${draft.age}"></div>
-          <div class="field"><label for="e-height">Taille (cm)</label><input type="number" id="e-height" min="120" max="220" step="1" value="${draft.height}"></div>
+          <div class="field"><label for="e-height">Taille (${hIn() ? 'pouces' : 'cm'})</label><input type="number" id="e-height" min="${hIn() ? 47 : 120}" max="${hIn() ? 87 : 220}" step="${hIn() ? 0.5 : 1}" value="${hIn() ? Math.round((draft.height / 2.54) * 2) / 2 : draft.height}"></div>
           <div class="field"><label for="e-country">Pays de référence</label><select id="e-country">${Object.entries(LS.COUNTRIES).map(([k, c]) => `<option value="${k}" ${draft.country === k ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></div>
         </div><p class="xs muted" style="margin-top:12px">Les champs suivants ont des valeurs moyennes par défaut. Ajuste ce que tu connais ; pour les analyses de sang, coche « Je ne connais pas » si tu n'as pas de résultat récent.</p>`;
         body.querySelector('[data-sex]').addEventListener('click', (e) => { const b = e.target.closest('[data-v]'); if (b) { draft.sex = b.dataset.v; draw(); } });
-        ['name', 'age', 'height', 'country'].forEach((k) => body.querySelector('#e-' + k).addEventListener('input', (e) => { draft[k] = k === 'name' || k === 'country' ? e.target.value : parseFloat(e.target.value); }));
+        ['name', 'age', 'height', 'country'].forEach((k) => body.querySelector('#e-' + k).addEventListener('input', (e) => { draft[k] = k === 'name' || k === 'country' ? e.target.value : k === 'height' && hIn() ? Math.round(parseFloat(e.target.value) * 2.54) : parseFloat(e.target.value); }));
       } else {
         const vars = VARS.filter((v) => v.dom === s.id);
         body.innerHTML = `<div class="ctl-list" style="padding:0">${vars.map((v) => ctlHTML(v, draft.values[v.id], undefined, { p: pFlat(), values: draft.values, pre: 'e-' })).join('')}</div>`;
@@ -1575,7 +1675,7 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
     };
     back.addEventListener('input', (e) => {
       const r = e.target.closest('[data-range]'); if (!r) return;
-      const id = r.dataset.range, v = VAR[id], val = parseFloat(r.value);
+      const id = r.dataset.range, v = VAR[id], val = fromUi(id, parseFloat(r.value));
       draft.values[id] = val; r.style.setProperty('--p', ((val - v.min) / (v.max - v.min)) * 100 + '%');
       const out = body.querySelector(`[data-out="${id}"]`); if (out) out.textContent = fmtVal(v, val, pFlat());
     });
@@ -1625,22 +1725,148 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
     store.save();
   }
 
-  /* ---------- Démarrage ---------- */
+  /* ---------- Démarrage, bienvenue, comptes ---------- */
+  const BIGLOGO = LOGO.replace('class="brand-mark"', 'class="brand-mark" style="width:56px;height:56px"');
+  function authFrame(inner) {
+    document.getElementById('app').innerHTML = `<div class="lock-screen"><div class="lock-card auth-card">${BIGLOGO}<span class="brand-word" style="font-size:18px">LIFESPAN</span>${inner}</div></div>`;
+    const f = $('.auth-card input'); if (f) f.focus();
+  }
+  const emptyData = () => ({ v: 1, activeId: null, profiles: {}, settings: {} });
+  function localData() { try { const d = JSON.parse(lsGet(KEY) || 'null'); return d && d.profiles ? d : null; } catch (e) { return null; } }
+  function enter(data, mode) {
+    store.mode = mode; store.key = null;
+    store.load(data || emptyData());
+    if (mode === 'local') store.save();
+    start();
+    if (!active()) setTimeout(() => sheetEdit(null), 50);
+  }
+  function welcome() {
+    const P = LS.Prefs.get(), Cl = LS.Cloud;
+    authFrame(`
+      <p class="auth-tag">Simule ta vie. Découvre tes leviers. Construis de meilleures habitudes.</p>
+      <div class="seg" role="group" aria-label="Langue" id="w-lang">${[['fr', 'Français'], ['en', 'English']].map(([k, l]) => `<button type="button" data-l="${k}" aria-pressed="${P.lang === k}">${l}</button>`).join('')}</div>
+      ${Cl.enabled ? `<button class="btn primary wide" type="button" data-w="signup">Créer un compte</button><button class="btn wide" type="button" data-w="signin">Se connecter</button><div class="or"><span>ou</span></div>` : ''}
+      <button class="btn ${Cl.enabled ? 'ghost' : 'primary'} wide" type="button" data-w="local">Utiliser sans compte</button>
+      <button class="btn ghost sm" type="button" data-w="example">Explorer avec un profil exemple</button>
+      <p class="xs muted">${Cl.enabled ? 'Avec un compte gratuit, tes données te suivent sur tous tes appareils. Elles sont chiffrées sur ton appareil avant d\'être sauvegardées : personne d\'autre ne peut les lire.' : 'Tes données restent sur cet appareil.'} Lifespan est un outil d'éducation à la santé, pas un dispositif médical.</p>`);
+    $('#w-lang').addEventListener('click', (e) => { const b = e.target.closest('[data-l]'); if (b && b.dataset.l !== P.lang) { LS.Prefs.set({ lang: b.dataset.l }); location.reload(); } });
+    $$('[data-w]').forEach((b) => b.addEventListener('click', () => {
+      const w = b.dataset.w;
+      if (w === 'signup' || w === 'signin') authScreen(w, {});
+      if (w === 'local') enter(localData() || emptyData(), 'local');
+      if (w === 'example') { const ex = makeExample(); enter({ v: 1, activeId: ex.id, profiles: { [ex.id]: ex }, settings: {} }, 'local'); }
+    }));
+  }
+  function authScreen(kind, opts) {
+    opts = opts || {};
+    const Cl = LS.Cloud, sess = Cl.session();
+    const back = `<button class="btn ghost sm" type="button" data-back>${opts.fromLocal || opts.migrate ? 'Retour à l\'app' : 'Retour'}</button>`;
+    if (kind === 'signup') {
+      authFrame(`<h1 class="auth-h">Créer un compte</h1>
+        <form class="auth-form" id="af" novalidate>
+          <div class="field"><label for="a-email">E-mail</label><input type="email" id="a-email" autocomplete="email" inputmode="email" required></div>
+          <div class="field"><label for="a-pw">Mot de passe (8 caractères minimum)</label><input type="password" id="a-pw" autocomplete="new-password" required></div>
+          <div class="field"><label for="a-pw2">Confirmer le mot de passe</label><input type="password" id="a-pw2" autocomplete="new-password" required></div>
+          <label class="row small" for="a-ok" style="text-align:left"><input type="checkbox" id="a-ok"> J'ai compris que Lifespan est un outil d'éducation, pas un avis médical.</label>
+          <button class="btn primary wide" type="submit">Créer mon compte</button>
+          <p class="small auth-err" id="a-err"></p>
+        </form>
+        <p class="xs muted">Déjà un compte ? <button class="btn ghost sm" type="button" data-to="signin">Se connecter</button></p>${back}`);
+      $('#af').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#a-err'), email = $('#a-email').value.trim(), pw = $('#a-pw').value;
+        if (!/^\S+@\S+\.\S+$/.test(email)) { err.textContent = 'Adresse e-mail invalide.'; return; }
+        if (pw.length < 8) { err.textContent = 'Le mot de passe doit contenir au moins 8 caractères.'; return; }
+        if (pw !== $('#a-pw2').value) { err.textContent = 'Les deux mots de passe ne correspondent pas.'; return; }
+        if (!$('#a-ok').checked) { err.textContent = 'Coche la case pour continuer.'; return; }
+        err.textContent = 'Création du compte et chiffrement…';
+        const data = opts.migrate ? JSON.parse(JSON.stringify(store.data)) : (localData() || emptyData());
+        Object.values(data.profiles || {}).forEach((p) => { if (p.example) delete data.profiles[p.id]; });
+        if (data.activeId && !data.profiles[data.activeId]) data.activeId = Object.keys(data.profiles)[0] || null;
+        try {
+          const r = await Cl.signUp(email, pw, data);
+          lsDel(KEY); lsDel(VKEY);
+          recoveryScreen(r.recovery, () => enter(data, 'account'));
+        } catch (x) { err.textContent = x.message; }
+      });
+    } else if (kind === 'signin') {
+      authFrame(`<h1 class="auth-h">Se connecter</h1>
+        ${opts.msg ? `<div class="notice" style="text-align:left">${esc(opts.msg)}</div>` : ''}
+        <form class="auth-form" id="af" novalidate>
+          <div class="field"><label for="a-email">E-mail</label><input type="email" id="a-email" autocomplete="email" inputmode="email" value="${esc(opts.email || (sess && sess.email) || '')}" required></div>
+          <div class="field"><label for="a-pw">Mot de passe</label><input type="password" id="a-pw" autocomplete="current-password" required></div>
+          <label class="row small" for="a-keep"><input type="checkbox" id="a-keep" checked> Rester connecté·e sur cet appareil</label>
+          <button class="btn primary wide" type="submit">Se connecter</button>
+          <p class="small auth-err" id="a-err"></p>
+        </form>
+        <button class="btn ghost sm" type="button" data-forgot>Mot de passe oublié ?</button>
+        <p class="xs muted">Pas encore de compte ? <button class="btn ghost sm" type="button" data-to="signup">Créer un compte</button></p>${back}`);
+      $('#af').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#a-err'), email = $('#a-email').value.trim(), pw = $('#a-pw').value;
+        err.textContent = 'Connexion et déchiffrement…';
+        try {
+          const r = await Cl.signIn(email, pw, $('#a-keep').checked);
+          lsDel(KEY); lsDel(VKEY);
+          if (r.data) enter(r.data, 'account');
+          else { const data = emptyData(); const rr = await Cl.initEmpty(data); recoveryScreen(rr.recovery, () => enter(data, 'account')); }
+        } catch (x) {
+          if (x.code === 'NEED_RECOVERY') authScreen('recover', { email }); else err.textContent = x.message;
+        }
+      });
+      $('[data-forgot]').addEventListener('click', () => authScreen('reset', { email: $('#a-email').value.trim() }));
+    } else if (kind === 'reset') {
+      authFrame(`<h1 class="auth-h">Mot de passe oublié</h1>
+        <p class="small muted">Tu vas recevoir un e-mail pour choisir un nouveau mot de passe. À la connexion suivante, ton <b style="color:var(--text);font-weight:500">code de récupération</b> te sera demandé pour déverrouiller tes données chiffrées.</p>
+        <form class="auth-form" id="af" novalidate>
+          <div class="field"><label for="a-email">E-mail</label><input type="email" id="a-email" autocomplete="email" value="${esc(opts.email || '')}" required></div>
+          <button class="btn primary wide" type="submit">Envoyer l'e-mail</button>
+          <p class="small auth-err" id="a-err"></p>
+        </form><button class="btn ghost sm" type="button" data-to="signin">Retour à la connexion</button>`);
+      $('#af').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#a-err');
+        try { await Cl.resetPassword($('#a-email').value.trim()); err.style.color = 'var(--good)'; err.textContent = 'E-mail envoyé. Vérifie ta boîte de réception (et les indésirables), puis reconnecte-toi.'; }
+        catch (x) { err.textContent = x.message; }
+      });
+    } else if (kind === 'recover') {
+      authFrame(`<h1 class="auth-h">Code de récupération</h1>
+        <p class="small muted">Ton mot de passe a changé. Entre le code de récupération reçu à la création du compte (format XXXX-XXXX-XXXX-XXXX).</p>
+        <form class="auth-form" id="af" novalidate>
+          <div class="field"><label for="a-rc">Code de récupération</label><input type="text" id="a-rc" class="pin" autocomplete="off" autocapitalize="characters" style="letter-spacing:.12em;font-size:16px"></div>
+          <button class="btn primary wide" type="submit">Déverrouiller mes données</button>
+          <p class="small auth-err" id="a-err"></p>
+        </form><p class="xs muted">Sans ce code, les données chiffrées ne peuvent pas être récupérées. Tu peux créer un nouveau départ en supprimant le compte depuis les réglages.</p>`);
+      $('#af').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#a-err'); err.textContent = 'Déchiffrement…';
+        try { const r = await Cl.useRecovery($('#a-rc').value); enter(r.data, 'account'); } catch (x) { err.textContent = x.message; }
+      });
+    }
+    $$('[data-to]').forEach((b) => b.addEventListener('click', () => authScreen(b.dataset.to, opts)));
+    const bk = $('[data-back]');
+    if (bk) bk.addEventListener('click', () => { if (opts.fromLocal || opts.migrate) location.reload(); else welcome(); });
+  }
+  function recoveryScreen(code, then) {
+    authFrame(`<h1 class="auth-h">Ton code de récupération</h1>
+      <p class="small muted">Tes données sont chiffrées avec ton mot de passe. Si tu l'oublies, ce code est le <b style="color:var(--text);font-weight:500">seul moyen</b> de les récupérer. Note-le ou fais une capture d'écran, et range-le en lieu sûr.</p>
+      <div class="recovery" data-notr>${esc(code)}</div>
+      <button class="btn sm" type="button" id="rc-copy">Copier le code</button>
+      <label class="row small" for="rc-ok"><input type="checkbox" id="rc-ok"> J'ai noté mon code en lieu sûr</label>
+      <button class="btn primary wide" type="button" id="rc-go" disabled>Continuer</button>`);
+    $('#rc-ok').addEventListener('change', (e) => ($('#rc-go').disabled = !e.target.checked));
+    $('#rc-copy').addEventListener('click', () => { (navigator.clipboard ? navigator.clipboard.writeText(code) : Promise.reject()).then(() => toast('Code copié')).catch(() => toast('Sélectionne le code pour le copier')); });
+    $('#rc-go').addEventListener('click', () => { toast('Compte prêt · tes données sont chiffrées'); then(); });
+  }
   function lockScreen() {
-    document.getElementById('app').innerHTML = `<div class="lock-screen"><form class="lock-card" id="unlock" autocomplete="off">
-      ${LOGO.replace('brand-mark', 'brand-mark" style="width:52px;height:52px')}
-      <span class="brand-word" style="font-size:18px">LIFESPAN</span>
-      <p class="muted small">Tes données sont chiffrées sur cet appareil. Entre ton code pour les ouvrir.</p>
-      <input type="password" id="unlock-code" class="pin" autocomplete="current-password" aria-label="Code" style="max-width:260px">
-      <button class="btn primary" type="submit" style="min-width:200px">Déverrouiller</button>
-      <p class="small" id="unlock-err" style="color:var(--bad);min-height:20px"></p>
-      <button class="btn ghost sm" type="button" id="forgot">Code oublié ?</button><div id="forgot-box"></div>
-    </form></div>`;
-    $('#unlock-code').focus();
+    authFrame(`<p class="muted small">Tes données sont chiffrées sur cet appareil. Entre ton code pour les ouvrir.</p>
+      <form class="auth-form" id="unlock" autocomplete="off"><input type="password" id="unlock-code" class="pin" autocomplete="current-password" aria-label="Code">
+      <button class="btn primary wide" type="submit">Déverrouiller</button><p class="small auth-err" id="unlock-err"></p></form>
+      <button class="btn ghost sm" type="button" id="forgot">Code oublié ?</button><div id="forgot-box"></div>`);
     $('#unlock').addEventListener('submit', async (e) => {
       e.preventDefault();
       const err = $('#unlock-err'); err.textContent = 'Vérification…';
-      try { await store.unlock($('#unlock-code').value); start(); }
+      try { await store.unlock($('#unlock-code').value); store.mode = 'local'; start(); }
       catch (x) { err.textContent = 'Code incorrect.'; $('#unlock-code').select(); }
     });
     $('#forgot').addEventListener('click', () => {
@@ -1648,24 +1874,57 @@ L plafonné = ${LS.PARAMS.cap} · tanh(L / ${LS.PARAMS.cap})</div></div></li>
       $('#wipe').addEventListener('click', () => { lsDel(VKEY); lsDel(KEY); location.reload(); });
     });
   }
+  let started = false;
   function start() {
     applySettings();
     shell();
     render();
+    if (started) return;
+    started = true;
     window.addEventListener('hashchange', () => { closeSheet(); render(); const v = $('#view'); if (v) v.focus({ preventScroll: true }); window.scrollTo(0, 0); });
     const mq = window.matchMedia('(prefers-color-scheme: dark)');
-    if (mq.addEventListener) mq.addEventListener('change', () => { if (store.data.settings.theme === 'system') refreshColors(); });
+    if (mq.addEventListener) mq.addEventListener('change', () => { if (LS.Prefs.get().theme === 'system') refreshColors(); });
     syncReminders(false);
     checkWebReminders();
     setInterval(checkWebReminders, 30000);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) checkWebReminders(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { store.flushAll(); return; }
+      checkWebReminders();
+      if (store.mode === 'account') LS.Cloud.pullIfNewer().then((data) => { if (data) { store.load(data); invalidate(); simState.forId = null; render(); toast('Données mises à jour depuis un autre appareil'); } }).catch(() => {});
+    });
+    LS.Cloud.onStatus(updateSyncBadge);
+    updateSyncBadge();
   }
-  function boot() {
+  function updateSyncBadge() {
+    const st = LS.Cloud.status();
+    const txt = store.mode !== 'account' ? 'Données locales' : st.state === 'saving' ? 'Synchronisation…' : st.state === 'offline' ? 'Hors ligne · en attente' : 'Synchronisé';
+    $$('[data-sync]').forEach((el) => (el.textContent = txt));
+  }
+  async function boot() {
     if ('serviceWorker' in navigator && location.protocol === 'https:' && !isNative()) navigator.serviceWorker.register('sw.js').catch(() => {});
     if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+    applySettings();
+    LS.i18n.start();
+    if (isNative()) {
+      document.documentElement.classList.add('native');
+      const probe = document.createElement('div'); probe.style.cssText = 'position:fixed;top:0;height:0;padding-top:env(safe-area-inset-top,0px)';
+      document.body.appendChild(probe); const sat = parseFloat(getComputedStyle(probe).paddingTop) || 0; probe.remove();
+      const m = navigator.userAgent.match(/Android (\d+)/);
+      if (!sat && m && +m[1] >= 15) document.documentElement.classList.add('native-fallback');
+    }
+    const Cl = LS.Cloud, sess = Cl.session();
+    if (sess) {
+      if (sess.hasKey) {
+        try { const r = await Cl.resume(); if (r && r.data) { enter(r.data, 'account'); Cl.pullIfNewer().then((d) => { if (d) { store.load(d); invalidate(); render(); } }).catch(() => {}); return; } }
+        catch (e) { /* réseau ou cache : on redemande la connexion */ }
+      }
+      authScreen('signin', { email: sess.email });
+      return;
+    }
     if (store.hasVault() && Vault.ok) { lockScreen(); return; }
-    store.load();
-    start();
+    const d = localData();
+    if (d) { enter(d, 'local'); return; }
+    welcome();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 

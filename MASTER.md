@@ -203,7 +203,15 @@ l'arc = score de potentiel.
 - Coffre optionnel : AES-GCM 256, clé PBKDF2-SHA-256 (310 000 itérations) dérivée du code ; le code
   n'est jamais stocké ; code oublié = données irrécupérables (écran d'effacement).
 - Sauvegardes exportables, chiffrées par mot de passe si souhaité ; rappel de sauvegarde tous les 30 jours.
-- Pas de serveur : évite l'hébergement de données de santé (certification HDS en France).
+- Comptes (v3) : e-mail + mot de passe via Firebase Auth (API REST, offre gratuite), un document Firestore
+  `users/{uid}` qui ne contient que des blocs chiffrés. Clé de données aléatoire (AES-256) enveloppée
+  par une clé dérivée du mot de passe ET par une clé dérivée d'un code de récupération (affiché une
+  fois). Le serveur ne peut rien lire (chiffrement de bout en bout) ; mot de passe oublié → e-mail de
+  réinitialisation + code de récupération. Cache local chiffré, synchronisation différée hors ligne.
+- Sans compte : données locales, coffre optionnel par code.
+- Règles Firestore : lecture/écriture de `users/{uid}` uniquement par l'utilisateur authentifié `uid`.
+- Préférences d'appareil (`lifespan.prefs`, non sensibles) : langue FR/EN, thème, accent, taille du
+  texte, animations, unités (kg/lb, cm/pouces, g/L ou mmol/L).
 
 ## 7. Gamification
 
@@ -262,5 +270,6 @@ Scripts classiques (pas de modules ES) pour que l'app s'ouvre aussi en `file://`
 | 2026-09-27 | k = 0,70 / 0,92 / 0,85 ; aérobie 0,4 ; archétypes 25/52/18/5 + sélection par la survie | Calibrage : les 14 benchmarks §4 passent (voir `node tests/calibrate.mjs`) |
 | 2026-09-27 | Pas de décalage de morbidité supplémentaire (EVBS suit l'âge de risque) | Sinon le gain d'EVBS dépassait nettement celui d'EV (Li 2020, Nyberg 2020) |
 | 2026-09-27 | Benchmark B5 : activité + pas ensemble | Dans les cohortes déclaratives, la MVPA inclut la marche : tester l'une sans l'autre sous-estime l'effet |
+| 2026-09-27 | v3 : comptes chiffrés de bout en bout (Firebase gratuit), accueil/connexion, profils tous supprimables, réglages (langue, unités, texte, animations), correctif barre d'état Android | Demande utilisateur |
 | 2026-09-27 | v2 : chiffres Geist fins, avatar 3D, quêtes personnelles, coffre chiffré, rappels natifs, publication GitHub | Demande utilisateur : look plus professionnel, données par personne sécurisées, gamification |
 | 2026-09-27 | Arrêt du tabac dans une projection : à l'échéance de l'objectif | L'objectif s'exprime « non-fumeur d'ici telle date » ; la baisse de risque suit ensuite le modèle Jha |

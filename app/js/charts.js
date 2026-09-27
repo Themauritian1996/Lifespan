@@ -10,7 +10,7 @@
     for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step) out.push(+v.toFixed(10));
     return out;
   }
-  const MONTHS = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+  const MONTHS = LS.i18n && LS.i18n.lang === 'en' ? ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] : ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
   const fmtDate = (d) => MONTHS[d.getMonth()] + ' ' + d.getFullYear();
   const fmtDateShort = (d) => MONTHS[d.getMonth()] + ' ' + String(d.getFullYear()).slice(2);
 

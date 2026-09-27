@@ -97,7 +97,7 @@
     constructor(canvas, params) {
       this.c = canvas; this.ctx = canvas.getContext('2d');
       this.p = Object.assign({ sex: 'M', bmi: 23, waistExcess: 0, vitality: 0.8, age: 40, riskAge: 40, rhr: 66, score: 80, organs: {}, ring: true, callouts: false }, params || {});
-      this.reduced = root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      this.reduced = (root.matchMedia && root.matchMedia('(prefers-reduced-motion: reduce)').matches) || document.documentElement.getAttribute('data-motion') === 'reduce';
       this.drag = 0; this.last = 0;
       this.ro = new ResizeObserver(() => this.build()); this.ro.observe(canvas);
       this.bindDrag();
@@ -256,9 +256,9 @@
           ctx.beginPath(); ctx.moveTo(q[0], q[1]); ctx.lineTo(ex, ly); ctx.lineTo(left ? lx + 64 : lx - 64, ly); ctx.stroke();
           ctx.fillStyle = css(cc, 1); ctx.beginPath(); ctx.arc(q[0], q[1], 2.4, 0, Math.PI * 2); ctx.fill();
           ctx.textAlign = left ? 'left' : 'right';
-          ctx.fillStyle = css(col.muted, 1); ctx.fillText(o.label.toUpperCase(), lx, ly - 8);
+          ctx.fillStyle = css(col.muted, 1); ctx.fillText((LS.i18n ? LS.i18n.t(o.label) : o.label).toUpperCase(), lx, ly - 8);
           ctx.fillStyle = css(tone === 'text' ? col.text : col[tone], 1);
-          ctx.fillText(rr == null ? '—' : '× ' + rr.toFixed(2).replace('.', ','), lx, ly + 6);
+          ctx.fillText(rr == null ? '—' : '× ' + (LS.i18n && LS.i18n.lang === 'en' ? rr.toFixed(2) : rr.toFixed(2).replace('.', ',')), lx, ly + 6);
         });
       }
     }
