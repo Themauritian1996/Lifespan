@@ -196,7 +196,9 @@ main#view { padding-inline: 16px; padding-block: 16px calc(var(--tabbar) + 28px 
 .tile.flat { background: transparent; }
 .tile.round { border-radius: 50%; aspect-ratio: 1; align-items: center; justify-content: center; text-align: center; padding: 12px; max-width: 100%; }
 .tile.pill { border-radius: 999px; flex-direction: row; align-items: center; padding: 12px 20px; }
-.tile-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tile-head { display: flex; align-items: center; justify-content: space-between; gap: 6px 10px; flex-wrap: wrap; }
+.chip { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.avatar-hud { flex-wrap: wrap; }
 .tile h2 { font-size: 17px; }
 .tile h3 { font-size: 15px; }
 .span-2 { grid-column: span 2; }
@@ -346,7 +348,7 @@ input[type='range'].changed::-webkit-slider-thumb { border-color: var(--accent);
 input[type='range'].changed::-moz-range-thumb { border-color: var(--accent); background: var(--accent); }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label, .field .lab { font-size: 13px; color: var(--text-2); }
-.input, input[type='number'], input[type='text'], input[type='date'], select, textarea {
+.input, input[type='number'], input[type='text'], input[type='password'], input[type='date'], select, textarea {
   min-height: 42px; padding: 8px 14px; border-radius: var(--r-ctl); border: 1px solid var(--line-strong); background: var(--surface-2); width: 100%;
 }
 textarea { min-height: 140px; font-family: var(--f-mono); font-size: 12px; }

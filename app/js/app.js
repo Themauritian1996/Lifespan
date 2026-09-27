@@ -580,12 +580,12 @@
         <div class="row"><button class="btn sm" data-open="edit" type="button">Modifier mes valeurs</button><a class="btn primary sm" href="#sim">${icon('sim')} Simuler un changement</a></div>
       </div>
       <div class="grid">
-        <div class="tile avatar-tile span-2 c2 w4 r2">
+        <div class="tile avatar-tile span-2 c3 w4 r2">
           <canvas id="av-now" aria-label="Avatar : silhouette selon l'IMC, organes colorés selon les risques"></canvas>
           <div class="avatar-hud"><span class="chip">${prof.sex === 'F' ? 'F' : 'H'} · ${f0(Math.floor(ev.age))} ans</span><span class="chip ${gapRisk > 1 ? 'warn' : gapRisk < -1 ? 'good' : ''}">Âge de risque ${f0(ev.riskAge)}</span></div>
           <div class="avatar-foot">${legendOrgans()}<span class="label">Potentiel ${ev.score} %</span></div>
         </div>
-        <div class="tile hero-le span-2 c4 w5">
+        <div class="tile hero-le span-2 c3 w5">
           <div class="tile-head"><span class="label">Âge attendu</span><span class="chip">${sign(dLE)} ans vs moyenne</span></div>
           <div><span class="big xl">${f1(ev.leTotal)}</span><span class="unit">ANS</span></div>
           <div class="band">Fourchette ${f1(ev.leLo)} – ${f1(ev.leHi)} · moyenne ${f1(ev.popLeTotal)} ans · ${f1(ev.le)} années restantes en moyenne</div>
