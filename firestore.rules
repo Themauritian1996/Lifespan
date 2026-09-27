@@ -1,0 +1,15 @@
+rules_version = '2';
+// Lifespan : chaque personne ne peut lire et écrire que son propre document chiffré.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{uid} {
+      allow read, delete: if request.auth != null && request.auth.uid == uid;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['v', 'salt', 'wiv', 'wct', 'rsalt', 'riv', 'rct', 'iv', 'ct', 'updated'])
+        && request.resource.size() < 900000;
+    }
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

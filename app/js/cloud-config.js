@@ -3,6 +3,6 @@
    Ces valeurs sont publiques par nature : la sécurité repose sur les règles Firestore
    et sur le chiffrement de bout en bout (voir MASTER.md §6 ter). */
 window.LIFESPAN_CLOUD = {
-  apiKey: '',
-  projectId: ''
+  apiKey: 'AIzaSyBA711FdzZLQB1VFkS1Fj31Nqmc30XS5VY',
+  projectId: 'lifespan-app-7357'
 };
