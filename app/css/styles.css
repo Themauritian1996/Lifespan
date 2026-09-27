@@ -76,6 +76,7 @@
 :root[data-theme='dark'] { color-scheme: dark; }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -512,3 +513,6 @@ input[type='checkbox'] { accent-color: var(--accent); width: 18px; height: 18px;
 .sheet-back { padding-top: var(--sat); }
 .page-head { scroll-margin-top: 80px; }
 .sim-sticky { top: calc(var(--sat) + 62px); }
+
+.toast { transition: opacity .25s, transform .25s; cursor: pointer; }
+.toast.out { opacity: 0; transform: translate(-50%, 8px); }

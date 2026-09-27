@@ -492,9 +492,10 @@
     let t = $('#toast');
     if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
     t.innerHTML = html ? msg : esc(msg);
-    t.hidden = false;
+    if (!t._tap) { t._tap = true; t.addEventListener('click', () => { clearTimeout(toastTimer); t.classList.add('out'); setTimeout(() => (t.hidden = true), 250); }); }
+    t.classList.remove('out'); t.hidden = false;
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => (t.hidden = true), 2600);
+    toastTimer = setTimeout(() => { t.classList.add('out'); toastTimer = setTimeout(() => (t.hidden = true), 250); }, 2600);
   }
 
   /* ---------- Coquille et routage ---------- */
